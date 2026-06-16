@@ -299,6 +299,21 @@
         </div>
       </div>
 
+      <div class="section" id="offboardSection" style="border-color:#5a2a2c;">
+        <h3>🚪 Offboarding</h3>
+        <p class="desc">Deactivate blocks this customer from logging in but keeps their data (reversible). Delete permanently erases all of their data and cannot be undone.</p>
+        <p class="desc" id="offboardStatus" style="margin-bottom:12px;"></p>
+        <div class="row" style="gap:10px;">
+          <button class="btn sm" id="btnDeactivate">Deactivate</button>
+          <button class="btn sm" id="btnReactivate">Reactivate</button>
+        </div>
+        <div style="margin-top:16px; padding-top:14px; border-top:1px dashed #5a2a2c;">
+          <label class="lbl" style="color:#ffd7d7;">Delete permanently — type the company name to confirm</label>
+          <input id="delConfirm" type="text" placeholder="" autocomplete="off" />
+          <button class="btn sm danger" id="btnDelete" style="margin-top:10px;">Delete permanently</button>
+        </div>
+      </div>
+
     </div>
   </div>
 </div>
@@ -494,6 +509,29 @@ function openManage(id) {
   $("plStatus").value = t.status;
   $("plCap").value = "";
   $("trDays").value = 14;
+
+  // ---- Offboarding section state ----
+  // Tenant 1 is the platform-admin account and can never be deactivated or
+  // deleted, so hide the whole section for it. For everyone else, show the
+  // right button based on current status and prime the delete confirmation.
+  const isProtected = t.id === 1;
+  $("offboardSection").style.display = isProtected ? "none" : "";
+  if (!isProtected) {
+    const deactivated = String(t.tenantStatus || "active").toLowerCase() !== "active";
+    $("btnDeactivate").style.display = deactivated ? "none" : "";
+    $("btnReactivate").style.display = deactivated ? "" : "none";
+    if (deactivated) {
+      const when = t.deletedAt ? fmtDate(t.deletedAt) : "";
+      $("offboardStatus").textContent = "Status: DEACTIVATED" + (when ? " since " + when : "") + ". Their users cannot log in.";
+      $("offboardStatus").style.color = "#ffb4b4";
+    } else {
+      $("offboardStatus").textContent = "Status: active.";
+      $("offboardStatus").style.color = "";
+    }
+    $("delConfirm").value = "";
+    $("delConfirm").placeholder = t.name;
+  }
+
   $("overlay").classList.remove("hidden");
 }
 function closeManage() { $("overlay").classList.add("hidden"); current = null; }
@@ -537,6 +575,77 @@ $("saveTrial").addEventListener("click", (e) => {
   if (!days || days < 1) { toast("Enter a number of days.", true); return; }
   act({ action: "extend_trial", days }, "Trial extended.", e.target);
 });
+
+$("btnDeactivate").addEventListener("click", (e) => {
+  if (!current) return;
+  if (!confirm("Deactivate \"" + current.name + "\"? Their users will be blocked from logging in. You can reactivate any time. No data is deleted.")) return;
+  act({ action: "deactivate" }, "Customer deactivated.", e.target);
+});
+
+$("btnReactivate").addEventListener("click", (e) => {
+  if (!current) return;
+  act({ action: "reactivate" }, "Customer reactivated.", e.target);
+});
+
+// Hard delete. The server requires confirmName to match the tenant name exactly
+// and (unless deactivated >30 days) a force flag. We surface the force step as a
+// second explicit confirm so a recently-churned customer is never purged by
+// reflex — the operator must knowingly override the 30-day grace window.
+$("btnDelete").addEventListener("click", async (e) => {
+  if (!current) return;
+  const typed = $("delConfirm").value.trim();
+  if (typed !== current.name) {
+    toast("Type the company name exactly to confirm deletion.", true);
+    return;
+  }
+  if (!confirm("PERMANENTLY DELETE \"" + current.name + "\" and ALL of their data (customers, appointments, invoices, users)? This cannot be undone.")) return;
+  const btn = e.target;
+  const old = btn.textContent; btn.disabled = true; btn.innerHTML = '<span class="spin"></span>';
+  const tenantName = current.name;
+  try {
+    await deleteTenant({ confirmName: typed, force: false });
+    toast("\"" + tenantName + "\" permanently deleted.");
+    closeManage();
+    await loadTenants();
+  } catch (err) {
+    // 30-day grace guard: server asks for force. Ask the operator one more time.
+    if (err && err.requiresForce) {
+      btn.disabled = false; btn.textContent = old;
+      if (confirm(err.message + "\n\nDelete now anyway?")) {
+        btn.disabled = true; btn.innerHTML = '<span class="spin"></span>';
+        try {
+          await deleteTenant({ confirmName: typed, force: true });
+          toast("\"" + tenantName + "\" permanently deleted.");
+          closeManage();
+          await loadTenants();
+        } catch (err2) {
+          toast("Delete failed: " + err2.message, true);
+        }
+      }
+    } else {
+      toast("Delete failed: " + (err.message || "unknown error"), true);
+    }
+  } finally {
+    btn.disabled = false; btn.textContent = old;
+  }
+});
+
+// Calls the delete action and throws a richer error (carrying requiresForce)
+// so the click handler can offer the force retry.
+async function deleteTenant({ confirmName, force }) {
+  const res = await fetch(API_BASE + "/api/admin/platform/tenants/" + current.id, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Authorization": "Bearer " + getToken() },
+    body: JSON.stringify({ action: "delete", confirmName, force }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const e = new Error(data.error || ("HTTP " + res.status));
+    e.requiresForce = !!data.requiresForce;
+    throw e;
+  }
+  return data;
+}
 
 // ---- Boot: if we already have a token, try to resume ----
 (async function boot() {
