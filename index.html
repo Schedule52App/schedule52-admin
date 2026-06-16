@@ -259,7 +259,7 @@
   <!-- VIEW: SYSTEM HEALTH -->
   <div class="wrap hidden" id="viewHealth">
     <h1 class="page-title">System Health</h1>
-    <p class="page-sub">Live app and database diagnostics for the production server. Host CPU, RAM, and disk are monitored by Railway — see the link at the bottom (the app can only see its own process from inside the container). This view auto-refreshes every 15 seconds while open.</p>
+    <p class="page-sub">Live app and database diagnostics for the production server. Host CPU, RAM, and disk are monitored by Railway — open them with the link at the bottom (the app can only see its own process from inside the container). This view auto-refreshes every 15 seconds while open.</p>
 
     <div class="toolbar">
       <span class="muted" id="healthMeta" style="flex:1;"></span>
@@ -463,7 +463,7 @@ function enterApp(me) {
 
 // ---- System Health ----
 let healthTimer = null;
-const RAILWAY_PROJECT_URL = "https://railway.com/dashboard"; // lands on the project list; open schedule52 -> schedule52-server service -> Metrics tab
+const RAILWAY_PROJECT_URL = "https://railway.com/project/066c8e72-a4fa-4f69-9bd8-e0ecc33fdf6f/service/adbe025e-136e-4f9e-9da1-5a01d33892b8/metrics?environmentId=159cc511-a7f8-457b-abe6-6912d83a7c6e"; // deep-link straight to schedule52-server production Metrics tab
 
 function fmtBytes(n) {
   if (n == null || isNaN(n)) return "—";
@@ -616,8 +616,8 @@ function renderHealth(m) {
   const railwayPanel =
     '<div class="note-box">'
     + '<div style="font-weight:700;margin-bottom:6px;">Host CPU, memory &amp; disk</div>'
-    + '<div class="muted" style="font-size:13.5px;">Host CPU, RAM, network, and disk are measured by Railway from outside the container (the app itself can only see its own process — shown above). The button opens your Railway dashboard: click the <strong>schedule52</strong> project, then the <strong>schedule52-server</strong> service, then the <strong>Metrics</strong> tab.</div>'
-    + '<a class="btn sm" href="' + RAILWAY_PROJECT_URL + '" target="_blank" rel="noopener" style="display:inline-block;margin-top:12px;text-decoration:none;">Open Railway dashboard ↗</a>'
+    + '<div class="muted" style="font-size:13.5px;">Host CPU, RAM, network, and disk are measured by Railway from outside the container (the app itself can only see its own process — shown above). The button opens the <strong>schedule52-server</strong> Metrics graphs in Railway directly.</div>'
+    + '<a class="btn sm" href="' + RAILWAY_PROJECT_URL + '" target="_blank" rel="noopener" style="display:inline-block;margin-top:12px;text-decoration:none;">Open Railway metrics ↗</a>'
     + "</div>";
 
   $("healthBody").innerHTML =
