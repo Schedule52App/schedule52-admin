@@ -102,6 +102,38 @@
   .dot.green { background: var(--green); } .dot.amber { background: var(--amber); } .dot.red { background: var(--red); }
   .muted { color: var(--muted); }
 
+  /* Tab nav */
+  .tabs { display: flex; gap: 6px; }
+  .tab {
+    appearance: none; background: transparent; border: 1px solid transparent; color: var(--muted);
+    padding: 7px 14px; border-radius: 9px; font-size: 14px; font-weight: 600; cursor: pointer;
+  }
+  .tab:hover { color: var(--text); background: var(--panel-2); }
+  .tab.active { color: #fff; background: var(--panel-2); border-color: var(--border); }
+
+  /* System Health */
+  .grid { display: grid; gap: 14px; }
+  .grid.kpi { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+  .grid.two { grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+  .metric {
+    background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 16px 18px;
+  }
+  .metric .k { font-size: 12px; letter-spacing: .4px; text-transform: uppercase; color: var(--muted); }
+  .metric .v { font-size: 26px; font-weight: 800; margin-top: 6px; line-height: 1.1; }
+  .metric .v small { font-size: 13px; font-weight: 600; color: var(--muted); }
+  .panel-h { font-size: 14px; font-weight: 700; padding: 13px 16px; border-bottom: 1px solid var(--border); background: var(--panel-2); display: flex; align-items: center; justify-content: space-between; }
+  .kv { display: flex; justify-content: space-between; gap: 16px; padding: 9px 16px; border-bottom: 1px solid #1b2436; font-size: 13.5px; }
+  .kv:last-child { border-bottom: none; }
+  .kv .key { color: var(--muted); }
+  .kv .val { font-weight: 600; font-variant-numeric: tabular-nums; }
+  .bar { height: 7px; border-radius: 999px; background: #1b2436; overflow: hidden; margin-top: 8px; }
+  .bar > span { display: block; height: 100%; background: var(--primary); }
+  .bar.warn > span { background: var(--amber); } .bar.bad > span { background: var(--red); } .bar.good > span { background: var(--green); }
+  .hint { color: var(--muted); font-size: 12.5px; padding: 12px 16px; }
+  code.q { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: #cdd9ee; white-space: normal; word-break: break-word; display: block; max-width: 560px; }
+  .note-box { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px 18px; }
+
   /* Login */
   .login-screen { display: flex; align-items: center; justify-content: center; min-height: 100vh; padding: 20px; }
   .login-card {
@@ -188,13 +220,18 @@
 <div id="app" class="hidden">
   <div class="topbar">
     <div class="brand">Schedule52 <span class="badge">Platform Admin</span></div>
+    <div class="tabs">
+      <button class="tab active" id="tabTenants">Tenants</button>
+      <button class="tab" id="tabHealth">System Health</button>
+    </div>
     <div class="who">
       <span id="whoami"></span>
       <button class="btn sm ghost" id="logoutBtn">Sign out</button>
     </div>
   </div>
 
-  <div class="wrap">
+  <!-- VIEW: TENANTS -->
+  <div class="wrap" id="viewTenants">
     <h1 class="page-title">All tenants</h1>
     <p class="page-sub">Manage every customer's subscription, comp Elite features at any price, and adjust plans, caps, and trials. "Pays" is the real Paddle billing plan; "Gets" is the effective feature tier.</p>
 
@@ -216,6 +253,21 @@
         </table>
       </div>
       <div id="emptyState" class="empty hidden"></div>
+    </div>
+  </div>
+
+  <!-- VIEW: SYSTEM HEALTH -->
+  <div class="wrap hidden" id="viewHealth">
+    <h1 class="page-title">System Health</h1>
+    <p class="page-sub">Live app and database diagnostics for the production server. Host CPU, RAM, and disk are monitored by Railway — see the link at the bottom. This view auto-refreshes every 15 seconds while open.</p>
+
+    <div class="toolbar">
+      <span class="muted" id="healthMeta" style="flex:1;"></span>
+      <button class="btn" id="healthRefresh">↻ Refresh</button>
+    </div>
+
+    <div id="healthBody">
+      <div class="note-box muted"><span class="spin"></span> Loading metrics…</div>
     </div>
   </div>
 </div>
@@ -408,6 +460,180 @@ function enterApp(me) {
   $("whoami").textContent = (me.displayName || me.username || "") + " · operator";
   loadTenants();
 }
+
+// ---- System Health ----
+let healthTimer = null;
+const RAILWAY_PROJECT_URL = "https://railway.app/project/"; // operator lands on their projects; open schedule52 -> service -> Metrics
+
+function fmtBytes(n) {
+  if (n == null || isNaN(n)) return "—";
+  const u = ["B", "KB", "MB", "GB", "TB"];
+  let i = 0; let v = Number(n);
+  while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+  return (v >= 100 || i === 0 ? Math.round(v) : v.toFixed(1)) + " " + u[i];
+}
+function fmtUptime(sec) {
+  if (sec == null) return "—";
+  const d = Math.floor(sec / 86400); sec -= d * 86400;
+  const h = Math.floor(sec / 3600); sec -= h * 3600;
+  const m = Math.floor(sec / 60);
+  if (d > 0) return d + "d " + h + "h " + m + "m";
+  if (h > 0) return h + "h " + m + "m";
+  return m + "m";
+}
+function fmtNum(n) {
+  if (n == null || isNaN(n)) return "—";
+  return Number(n).toLocaleString();
+}
+function esc(s) {
+  return String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+}
+
+function showView(which) {
+  const onHealth = which === "health";
+  $("viewTenants").classList.toggle("hidden", onHealth);
+  $("viewHealth").classList.toggle("hidden", !onHealth);
+  $("tabTenants").classList.toggle("active", !onHealth);
+  $("tabHealth").classList.toggle("active", onHealth);
+  clearInterval(healthTimer); healthTimer = null;
+  if (onHealth) {
+    loadHealth();
+    // Auto-refresh only while the Health tab is open; cleared on tab switch.
+    healthTimer = setInterval(loadHealth, 15000);
+  }
+}
+$("tabTenants").addEventListener("click", () => showView("tenants"));
+$("tabHealth").addEventListener("click", () => showView("health"));
+$("healthRefresh").addEventListener("click", () => loadHealth());
+
+async function loadHealth() {
+  try {
+    const m = await api("/api/admin/platform/metrics");
+    renderHealth(m);
+  } catch (err) {
+    if (err.status === 401) { setToken(""); location.reload(); return; }
+    $("healthBody").innerHTML = '<div class="note-box" style="color:#ff9ea1;">Could not load metrics: ' + esc(err.message) + "</div>";
+    $("healthMeta").textContent = "";
+  }
+}
+
+function renderHealth(m) {
+  const p = m.process || {};
+  const mem = p.memory || {};
+  const db = m.database || {};
+  const k = m.kpis || {};
+  const conn = db.connections;
+  const cache = db.cacheHit;
+  const pool = p.pool;
+
+  $("healthMeta").textContent = "Last updated " + new Date(m.generatedAt).toLocaleTimeString()
+    + (p.serverCommit ? "  ·  build " + String(p.serverCommit).slice(0, 7) : "");
+
+  // KPI cards
+  let kpiCards = "";
+  if (k) {
+    const cards = [
+      ["Tenants", fmtNum(k.tenantsTotal), (k.tenantsActive || 0) + " active · " + (k.tenantsDeactivated || 0) + " off"],
+      ["Users", fmtNum(k.usersTotal), null],
+      ["Customers", fmtNum(k.customersTotal), null],
+      ["Technicians", fmtNum(k.techniciansTotal), null],
+      ["Appointments", fmtNum(k.appointmentsTotal), fmtNum(k.appointmentsToday) + " today"],
+    ];
+    kpiCards = cards.map((c) =>
+      '<div class="metric"><div class="k">' + c[0] + '</div><div class="v">' + c[1]
+      + (c[2] ? ' <small>' + esc(c[2]) + "</small>" : "") + "</div></div>"
+    ).join("");
+  }
+
+  // Heap usage bar
+  const heapPct = mem.heapTotalBytes ? Math.min(100, Math.round((mem.heapUsedBytes / mem.heapTotalBytes) * 100)) : 0;
+  const heapClass = heapPct >= 90 ? "bad" : heapPct >= 75 ? "warn" : "good";
+
+  // Process panel
+  const procPanel =
+    '<div class="card">'
+    + '<div class="panel-h">Application process <span class="muted" style="font-weight:500;">' + esc(p.nodeVersion || "") + " · " + esc(p.platform || "") + "</span></div>"
+    + kv("Uptime", fmtUptime(p.uptimeSeconds))
+    + kv("Heap used", fmtBytes(mem.heapUsedBytes) + " / " + fmtBytes(mem.heapTotalBytes) + " (" + heapPct + "%)")
+    + '<div style="padding:0 16px 14px;"><div class="bar ' + heapClass + '"><span style="width:' + heapPct + '%"></span></div></div>'
+    + kv("RSS (resident memory)", fmtBytes(mem.rssBytes))
+    + kv("External / buffers", fmtBytes((mem.externalBytes || 0) + (mem.arrayBuffersBytes || 0)))
+    + (pool
+        ? kv("DB pool (app role)", pool.total + " open · " + pool.idle + " idle · " + pool.waiting + " waiting · max " + pool.max)
+        : kv("DB pool (app role)", "n/a"))
+    + "</div>";
+
+  // Database panel
+  let dbPanel =
+    '<div class="card">'
+    + '<div class="panel-h">Database</div>'
+    + kv("Total size", (db.size && db.size.pretty) || "—");
+  if (conn) {
+    dbPanel += kv("Connections", conn.total + " / " + conn.maxConnections + " max")
+      + kv("  · active / idle", conn.active + " active · " + conn.idle + " idle · " + conn.idleInTransaction + " idle-in-txn");
+  }
+  if (cache) {
+    const ratioPct = cache.ratio == null ? null : (cache.ratio * 100);
+    const cClass = ratioPct == null ? "" : ratioPct >= 99 ? "good" : ratioPct >= 95 ? "warn" : "bad";
+    dbPanel += kv("Cache hit ratio", ratioPct == null ? "—" : ratioPct.toFixed(2) + "%");
+    if (ratioPct != null) dbPanel += '<div style="padding:0 16px 14px;"><div class="bar ' + cClass + '"><span style="width:' + Math.min(100, ratioPct) + '%"></span></div></div>';
+    dbPanel += kv("Transactions", fmtNum(cache.commits) + " commits · " + fmtNum(cache.rollbacks) + " rollbacks");
+  }
+  dbPanel += "</div>";
+
+  // Tables panel (per-table rows + size)
+  let tablesPanel = "";
+  if (Array.isArray(db.tables) && db.tables.length) {
+    const trows = db.tables.map((t) =>
+      "<tr><td>" + esc(t.name) + '</td><td style="text-align:right;font-variant-numeric:tabular-nums;">' + fmtNum(t.rows)
+      + '</td><td style="text-align:right;">' + esc(t.pretty) + "</td></tr>"
+    ).join("");
+    tablesPanel =
+      '<div class="card"><div class="panel-h">Tables (' + db.tables.length + ")</div>"
+      + '<div class="table-scroll"><table><thead><tr><th>Table</th><th style="text-align:right;">Est. rows</th><th style="text-align:right;">Total size</th></tr></thead><tbody>'
+      + trows + "</tbody></table></div></div>";
+  }
+
+  // Slow queries panel
+  let slowPanel = "";
+  const sq = db.slowQueries;
+  if (sq && sq.available && sq.rows && sq.rows.length) {
+    const srows = sq.rows.map((r) =>
+      '<tr><td><code class="q">' + esc(r.query) + '</code></td><td style="text-align:right;font-variant-numeric:tabular-nums;">' + fmtNum(r.calls)
+      + '</td><td style="text-align:right;">' + fmtNum(r.totalMs) + ' ms</td><td style="text-align:right;">' + r.meanMs + " ms</td></tr>"
+    ).join("");
+    slowPanel =
+      '<div class="card"><div class="panel-h">Slowest queries (by total time)</div>'
+      + '<div class="table-scroll"><table><thead><tr><th>Query</th><th style="text-align:right;">Calls</th><th style="text-align:right;">Total</th><th style="text-align:right;">Mean</th></tr></thead><tbody>'
+      + srows + "</tbody></table></div></div>";
+  } else {
+    slowPanel =
+      '<div class="card"><div class="panel-h">Slowest queries</div>'
+      + '<div class="hint">Per-query timing needs the <strong>pg_stat_statements</strong> Postgres extension, which is not enabled on this database. To turn it on, add <code>pg_stat_statements</code> to the <code>shared_preload_libraries</code> setting in Railway and run <code>CREATE EXTENSION pg_stat_statements;</code> once. Without it, the rest of this dashboard still works.</div></div>';
+  }
+
+  // Railway host-metrics callout
+  const railwayPanel =
+    '<div class="note-box">'
+    + '<div style="font-weight:700;margin-bottom:6px;">Host CPU, memory &amp; disk</div>'
+    + '<div class="muted" style="font-size:13.5px;">Container-level CPU, RAM, network, and disk are collected by Railway with full history and alerting. This dashboard shows the app and database; for host hardware metrics open your Railway service and click the <strong>Metrics</strong> tab.</div>'
+    + '<a class="btn sm" href="' + RAILWAY_PROJECT_URL + '" target="_blank" rel="noopener" style="display:inline-block;margin-top:12px;text-decoration:none;">Open Railway metrics ↗</a>'
+    + "</div>";
+
+  $("healthBody").innerHTML =
+    '<div class="grid kpi" style="margin-bottom:16px;">' + kpiCards + "</div>"
+    + '<div class="grid two" style="margin-bottom:16px;">' + procPanel + dbPanel + "</div>"
+    + tablesPanel
+    + '<div style="height:16px;"></div>'
+    + slowPanel
+    + '<div style="height:16px;"></div>'
+    + railwayPanel;
+}
+
+function kv(key, val) {
+  return '<div class="kv"><span class="key">' + esc(key) + '</span><span class="val">' + esc(val) + "</span></div>";
+}
+
 
 // ---- Tenants ----
 async function loadTenants() {
