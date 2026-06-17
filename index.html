@@ -97,6 +97,9 @@
   .pill.pro { background: #2a2150; color: #cdc0f5; border-color: #43386f; }
   .pill.elite { background: #143028; color: #92e7c2; border-color: #1f5142; }
   .pill.comp { background: #3a2a12; color: #ffd9a0; border-color: #5e451d; margin-left: 6px; }
+  .pill.internal { background: #122a4a; color: #9ec7ff; border-color: #1d4575; margin-left: 6px; }
+  .pill.test { background: #2c2c33; color: #c4c4cf; border-color: #43434f; margin-left: 6px; }
+  .pill.demo { background: #3a2440; color: #e6b6f0; border-color: #5a3a63; margin-left: 6px; }
   .status-dot { display: inline-flex; align-items: center; gap: 6px; }
   .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
   .dot.green { background: var(--green); } .dot.amber { background: var(--amber); } .dot.red { background: var(--red); }
@@ -285,6 +288,27 @@
     <div class="modal-body">
 
       <div class="section">
+        <h3>🏷️ Identity &amp; classification</h3>
+        <p class="desc">Rename the tenant and set its account type. Account type separates real customers from our own internal, test, and demo accounts. Internal tenants are protected and can never be deactivated or deleted.</p>
+        <div class="row">
+          <div class="grow">
+            <label class="lbl">Company name</label>
+            <input id="clName" type="text" maxlength="120" placeholder="Company name" />
+          </div>
+          <div class="grow">
+            <label class="lbl">Account type</label>
+            <select id="clType">
+              <option value="customer">Customer</option>
+              <option value="internal">Internal (protected)</option>
+              <option value="test">Test</option>
+              <option value="demo">Demo</option>
+            </select>
+          </div>
+        </div>
+        <button class="btn primary sm" id="saveIdentity" style="margin-top:12px;">Save identity</button>
+      </div>
+
+      <div class="section">
         <h3>👑 Feature override (comp)</h3>
         <p class="desc">Grant a feature tier independent of what they pay — e.g. Elite features at the Starter price. Set to "No override" to clear it and revert to the paid plan.</p>
         <div class="row">
@@ -428,6 +452,20 @@ function statusDot(status) {
 // subscription status (t.status). Deactivation takes visual precedence in the table.
 function isDeactivated(t) {
   return String((t && t.tenantStatus) || "active").toLowerCase() !== "active";
+}
+// account_type classifies a tenant. 'customer' (the default) shows no badge;
+// internal/test/demo show a labeled pill so operators instantly see which rows
+// are real customers vs our own internal/QA/demo accounts.
+function accountType(t) {
+  return String((t && t.accountType) || "customer").toLowerCase();
+}
+function isInternal(t) { return accountType(t) === "internal"; }
+function accountBadge(t) {
+  const a = accountType(t);
+  if (a === "internal") return ' <span class="pill internal">internal</span>';
+  if (a === "test") return ' <span class="pill test">test</span>';
+  if (a === "demo") return ' <span class="pill demo">demo</span>';
+  return "";
 }
 
 // ---- Auth ----
@@ -681,7 +719,7 @@ function render() {
       : (t.currentPeriodEnd ? "Renews " + fmtDate(t.currentPeriodEnd) : "—");
     return `<tr>
       <td class="muted">${t.id}</td>
-      <td class="company">${esc(t.name)}${t.compNote ? `<small>${esc(t.compNote)}</small>` : (t.slug ? `<small>${esc(t.slug)}</small>` : "")}</td>
+      <td class="company">${esc(t.name)}${accountBadge(t)}${t.compNote ? `<small>${esc(t.compNote)}</small>` : (t.slug ? `<small>${esc(t.slug)}</small>` : "")}</td>
       <td><span class="pill ${t.plan}">${t.plan}</span></td>
       <td><span class="pill ${t.effectivePlan}">${t.effectivePlan}</span>${comped ? '<span class="pill comp">comp</span>' : ""}</td>
       <td>${isDeactivated(t)
@@ -736,6 +774,9 @@ function openManage(id) {
   current = t;
   $("mTitle").textContent = "Manage " + t.name;
   $("mSub").textContent = `Tenant #${t.id} · pays ${t.plan} · gets ${t.effectivePlan}`;
+  // Identity & classification
+  $("clName").value = t.name || "";
+  $("clType").value = accountType(t);
   $("ovTier").value = t.overrideTier || "";
   $("ovCap").value = "";
   $("ovNote").value = t.compNote || "";
@@ -745,10 +786,10 @@ function openManage(id) {
   $("trDays").value = 14;
 
   // ---- Offboarding section state ----
-  // Tenant 1 is the platform-admin account and can never be deactivated or
-  // deleted, so hide the whole section for it. For everyone else, show the
-  // right button based on current status and prime the delete confirmation.
-  const isProtected = t.id === 1;
+  // Internal tenants (and tenant 1, the platform-admin account) can never be
+  // deactivated or deleted, so hide the whole section for them. For everyone
+  // else, show the right button based on status and prime the delete confirm.
+  const isProtected = t.id === 1 || isInternal(t);
   $("offboardSection").style.display = isProtected ? "none" : "";
   if (!isProtected) {
     const deactivated = String(t.tenantStatus || "active").toLowerCase() !== "active";
@@ -787,6 +828,36 @@ async function act(body, okMsg, btn) {
     btn.disabled = false; btn.textContent = old;
   }
 }
+
+$("saveIdentity").addEventListener("click", async (e) => {
+  if (!current) return;
+  const newName = $("clName").value.trim();
+  const newType = $("clType").value;
+  if (!newName) { toast("Company name cannot be empty.", true); return; }
+  const nameChanged = newName !== (current.name || "");
+  const typeChanged = newType !== accountType(current);
+  if (!nameChanged && !typeChanged) { toast("No changes to save."); return; }
+  // Guard: warn before turning a tenant internal (it becomes undeletable).
+  if (typeChanged && newType === "internal") {
+    if (!confirm("Mark \"" + newName + "\" as INTERNAL? Internal tenants are protected and can never be deactivated or deleted from this console.")) return;
+  }
+  const btn = e.target; const old = btn.textContent;
+  btn.disabled = true; btn.innerHTML = '<span class="spin"></span>';
+  try {
+    if (nameChanged) {
+      await api("/api/admin/platform/tenants/" + current.id, { method: "POST", body: JSON.stringify({ action: "rename", name: newName }) });
+    }
+    if (typeChanged) {
+      await api("/api/admin/platform/tenants/" + current.id, { method: "POST", body: JSON.stringify({ action: "set_account_type", accountType: newType }) });
+    }
+    toast("Identity saved.");
+    closeManage();
+    await loadTenants();
+  } catch (err) {
+    toast("Failed: " + err.message, true);
+    btn.disabled = false; btn.textContent = old;
+  }
+});
 
 $("saveOverride").addEventListener("click", (e) => {
   const tier = $("ovTier").value || null;
