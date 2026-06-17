@@ -219,6 +219,24 @@
   </form>
 </div>
 
+<!-- FORCED PASSWORD CHANGE (shown when the server flags mustChangePassword) -->
+<div id="pwChange" class="login-screen hidden">
+  <form class="login-card" id="pwChangeForm">
+    <h1>🔐 Set your password</h1>
+    <p class="sub">You signed in with a temporary password. Set your own password to continue. Only you will know it.</p>
+    <div class="field">
+      <label for="newPw">New password</label>
+      <input id="newPw" type="password" autocomplete="new-password" placeholder="At least 8 characters" />
+    </div>
+    <div class="field">
+      <label for="newPw2">Confirm new password</label>
+      <input id="newPw2" type="password" autocomplete="new-password" placeholder="Re-enter your new password" />
+    </div>
+    <button class="btn primary" type="submit" id="pwChangeBtn" style="width:100%; margin-top:6px;">Set password &amp; continue</button>
+    <p class="err" id="pwChangeErr"></p>
+  </form>
+</div>
+
 <!-- APP -->
 <div id="app" class="hidden">
   <div class="topbar">
@@ -487,7 +505,7 @@ $("loginForm").addEventListener("submit", async (e) => {
       setToken("");
       throw new Error("This account is not a platform admin.");
     }
-    enterApp(me);
+    enterAppOrForceChange(me);
   } catch (err) {
     setToken("");
     errEl.textContent = err.message || "Sign-in failed.";
@@ -497,6 +515,49 @@ $("loginForm").addEventListener("submit", async (e) => {
 });
 
 $("logoutBtn").addEventListener("click", () => { setToken(""); location.reload(); });
+
+// If the server flags this account as must-change-password (a temp password
+// provisioned via the platform create-admin endpoint), block entry to the
+// console and force the operator to set their own private password first.
+function enterAppOrForceChange(me) {
+  if (me && me.mustChangePassword) {
+    $("login").classList.add("hidden");
+    $("app").classList.add("hidden");
+    $("pwChange").classList.remove("hidden");
+    setTimeout(() => { try { $("newPw").focus(); } catch (_) {} }, 50);
+    return;
+  }
+  enterApp(me);
+}
+
+// Forced password-change submit. The server's /api/auth/change-password skips
+// the currentPassword check when must_change_password is set, so we only send
+// the new password. On success the token is re-issued (flag cleared); we store
+// it and re-resume into the app.
+$("pwChangeForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const errEl = $("pwChangeErr"); errEl.textContent = "";
+  const btn = $("pwChangeBtn");
+  const pw = $("newPw").value;
+  const pw2 = $("newPw2").value;
+  if (pw.length < 8) { errEl.textContent = "Password must be at least 8 characters."; return; }
+  if (pw !== pw2) { errEl.textContent = "Passwords do not match."; return; }
+  btn.disabled = true; btn.innerHTML = '<span class="spin"></span> Saving…';
+  try {
+    const r = await api("/api/auth/change-password", { method: "POST", body: JSON.stringify({ newPassword: pw }) });
+    if (r && r.token) setToken(r.token);
+    $("newPw").value = ""; $("newPw2").value = "";
+    $("pwChange").classList.add("hidden");
+    const me = await api("/api/auth/me");
+    if (!me.platformAdmin) { setToken(""); location.reload(); return; }
+    enterApp(me);
+    toast("Password updated.");
+  } catch (err) {
+    errEl.textContent = err.message || "Could not set password.";
+  } finally {
+    btn.disabled = false; btn.textContent = "Set password & continue";
+  }
+});
 
 function enterApp(me) {
   $("login").classList.add("hidden");
@@ -957,7 +1018,7 @@ async function deleteTenant({ confirmName, force }) {
   if (!getToken()) return;
   try {
     const me = await api("/api/auth/me");
-    if (me.platformAdmin) { enterApp(me); return; }
+    if (me.platformAdmin) { enterAppOrForceChange(me); return; }
   } catch (_) {}
   setToken("");
 })();
