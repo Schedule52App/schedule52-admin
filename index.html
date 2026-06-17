@@ -423,6 +423,12 @@ function statusDot(status) {
   if (s === "past_due" || s === "paused") return "amber";
   return "red";
 }
+// A tenant is "deactivated" when its tenants.status (tenantStatus) is not active.
+// This is the account-lifecycle state (login gate) — distinct from the billing
+// subscription status (t.status). Deactivation takes visual precedence in the table.
+function isDeactivated(t) {
+  return String((t && t.tenantStatus) || "active").toLowerCase() !== "active";
+}
 
 // ---- Auth ----
 $("loginForm").addEventListener("submit", async (e) => {
@@ -678,7 +684,9 @@ function render() {
       <td class="company">${esc(t.name)}${t.compNote ? `<small>${esc(t.compNote)}</small>` : (t.slug ? `<small>${esc(t.slug)}</small>` : "")}</td>
       <td><span class="pill ${t.plan}">${t.plan}</span></td>
       <td><span class="pill ${t.effectivePlan}">${t.effectivePlan}</span>${comped ? '<span class="pill comp">comp</span>' : ""}</td>
-      <td><span class="status-dot"><span class="dot ${statusDot(t.status)}"></span>${esc(t.status)}</span></td>
+      <td>${isDeactivated(t)
+        ? `<span class="status-dot"><span class="dot red"></span>Deactivated</span>`
+        : `<span class="status-dot"><span class="dot ${statusDot(t.status)}"></span>${esc(t.status)}</span>`}</td>
       <td>${t.userCount}${t.userCap != null ? " / " + t.userCap : ""}</td>
       <td class="muted">${esc(trial)}</td>
       <td style="text-align:right;">
